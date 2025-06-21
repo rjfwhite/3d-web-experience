@@ -17,6 +17,7 @@ import {
   ToneMappingEffect,
 } from "postprocessing";
 import {
+  ACESFilmicToneMapping,
   AmbientLight,
   Color,
   EquirectangularReflectionMapping,
@@ -34,6 +35,7 @@ import {
   Texture,
   ToneMapping,
   Vector2,
+  Vector3,
   WebGLRenderer,
 } from "three";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
@@ -49,6 +51,8 @@ import { n8ssaoValues, ppssaoValues } from "../tweakpane/blades/ssaoFolder";
 import { toneMappingValues } from "../tweakpane/blades/toneMappingFolder";
 import { TweakPane } from "../tweakpane/TweakPane";
 
+import { Sky } from "./atmospheric-sky/Sky";
+import { SkyEnvironmentGenerator } from "./atmospheric-sky/SkyEnvironmentGenerator";
 import { BrightnessContrastSaturation } from "./post-effects/bright-contrast-sat";
 import { GaussGrainEffect } from "./post-effects/gauss-grain";
 import { N8SSAOPass } from "./post-effects/n8-ssao/N8SSAOPass";
@@ -74,6 +78,15 @@ export type EnvironmentConfiguration = {
     | {
         hdrUrl: string;
       }
+    | {
+        atmospheric?: {
+          turbidity?: number;
+          rayleigh?: number;
+          mieCoefficient?: number;
+          mieDirectionalG?: number;
+          sunPosition?: Vector3;
+        };
+      }
   );
   envMap?: {
     intensity?: number;
@@ -82,6 +95,11 @@ export type EnvironmentConfiguration = {
     intensity?: number;
     polarAngle?: number;
     azimuthalAngle?: number;
+    tracking?: {
+      enabled?: boolean;
+      speed?: number;
+      cycleDuration?: number;
+    };
   };
   fog?: {
     fogNear?: number;
@@ -147,8 +165,18 @@ export class Composer {
     latestPromise: Promise<unknown> | null;
   } = { src: {}, latestPromise: null };
 
+  // Atmospheric Sky System
+  private sky: Sky | null = null;
+  private skyEnvironmentGenerator: SkyEnvironmentGenerator | null = null;
+
   public sun: Sun | null = null;
   public spawnSun: boolean;
+
+  // Sun tracking system
+  private sunTrackingEnabled: boolean = false;
+  private sunTrackingSpeed: number = 0.01; // Speed multiplier for sun movement (increased from 0.1)
+  private sunCycleDuration: number = 30; // Duration of full sun cycle in seconds (reduced from 60)
+  private sunStartTime: number = 0; // Time when sun tracking started
 
   constructor({
     scene,
@@ -162,7 +190,7 @@ export class Composer {
     this.spawnSun = spawnSun;
     this.renderer = new WebGLRenderer({
       powerPreference: "high-performance",
-      antialias: false,
+      antialias: true,
     });
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.info.autoReset = false;
@@ -295,14 +323,33 @@ export class Composer {
     if (this.spawnSun === true) {
       this.sun = new Sun();
       this.scene.add(this.sun);
+      
+      // Configure sun tracking based on environment configuration
+      const sunTrackingConfig = this.environmentConfiguration?.sun?.tracking;
+      const trackingEnabled = sunTrackingConfig?.enabled !== false; // Default to true
+      const trackingSpeed = sunTrackingConfig?.speed ?? 1.0; // Faster default speed
+      const cycleDuration = sunTrackingConfig?.cycleDuration ?? 10; // Shorter default cycle
+      
+      if (trackingEnabled) {
+        this.enableSunTracking(trackingSpeed, cycleDuration);
+      }
     }
+
+    // Initialize atmospheric sky system
+    this.skyEnvironmentGenerator = new SkyEnvironmentGenerator(this.renderer);
+    this.initializeAtmosphericSky();
 
     if (this.environmentConfiguration?.skybox) {
       if ("hdrJpgUrl" in this.environmentConfiguration.skybox) {
         this.useHDRJPG(this.environmentConfiguration.skybox.hdrJpgUrl);
       } else if ("hdrUrl" in this.environmentConfiguration.skybox) {
         this.useHDRI(this.environmentConfiguration.skybox.hdrUrl);
+      } else if ("atmospheric" in this.environmentConfiguration.skybox) {
+        this.updateAtmosphericSky();
       }
+    } else {
+      // Default to atmospheric sky if no skybox configuration is provided
+      this.updateAtmosphericSky();
     }
 
     this.updateSunValues();
@@ -322,7 +369,12 @@ export class Composer {
         this.useHDRJPG(environmentConfiguration.skybox.hdrJpgUrl);
       } else if ("hdrUrl" in environmentConfiguration.skybox) {
         this.useHDRI(environmentConfiguration.skybox.hdrUrl);
+      } else if ("atmospheric" in environmentConfiguration.skybox) {
+        this.updateAtmosphericSky();
       }
+    } else {
+      // Default to atmospheric sky if no skybox configuration is provided
+      this.updateAtmosphericSky();
     }
 
     this.updateSkyboxAndEnvValues();
@@ -357,11 +409,19 @@ export class Composer {
       },
       this.setAmbientLight.bind(this),
       this.setFog.bind(this),
+      this.updateAtmosphericSky.bind(this),
+      this.syncSunWithSky.bind(this),
     );
   }
 
   public dispose() {
     window.removeEventListener("resize", this.resizeListener);
+    if (this.skyEnvironmentGenerator) {
+      this.skyEnvironmentGenerator.dispose();
+    }
+    if (this.sky) {
+      this.scene.remove(this.sky);
+    }
     this.renderer.dispose();
   }
 
@@ -406,13 +466,21 @@ export class Composer {
   }
 
   public render(timeManager: TimeManager): void {
-    this.renderer.info.reset();
-    this.renderPass.mainCamera = this.cameraManager.activeCamera;
-    this.normalPass.texture.needsUpdate = true;
-    this.gaussGrainEffect.uniforms.time.value = timeManager.time;
-    this.effectComposer.render();
-    this.renderer.clearDepth();
-    this.renderer.render(this.postPostScene, this.cameraManager.activeCamera);
+    // Update sun tracking if enabled
+    if (this.sunTrackingEnabled && this.sun) {
+      this.updateSunTracking(timeManager.time);
+    }
+
+    this.renderer.toneMappingExposure = 0.15;
+    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.render(this.scene, this.cameraManager.activeCamera);
+    // this.renderer.info.reset();
+    // this.renderPass.mainCamera = this.cameraManager.activeCamera;
+    // this.normalPass.texture.needsUpdate = true;
+    // this.gaussGrainEffect.uniforms.time.value = timeManager.time;
+    // this.effectComposer.render();
+    // this.renderer.clearDepth();
+    // this.renderer.render(this.postPostScene, this.cameraManager.activeCamera);
   }
 
   public updateSkyboxRotation() {
@@ -574,6 +642,21 @@ export class Composer {
       sunValues.sunPosition.sunPolarAngle = this.environmentConfiguration.sun.polarAngle;
       this.sun?.setPolarAngle(this.environmentConfiguration.sun.polarAngle * (Math.PI / 180));
     }
+    
+    // Handle sun tracking configuration
+    if (this.sun && this.environmentConfiguration?.sun?.tracking) {
+      const trackingConfig = this.environmentConfiguration.sun.tracking;
+      
+      if (trackingConfig.enabled === false) {
+        this.disableSunTracking();
+      } else if (trackingConfig.enabled === true || 
+                 typeof trackingConfig.speed === "number" || 
+                 typeof trackingConfig.cycleDuration === "number") {
+        const speed = trackingConfig.speed ?? this.sunTrackingSpeed;
+        const cycleDuration = trackingConfig.cycleDuration ?? this.sunCycleDuration;
+        this.enableSunTracking(speed, cycleDuration);
+      }
+    }
   }
 
   private updateFogValues() {
@@ -653,5 +736,225 @@ export class Composer {
       MathUtils.degToRad(envValues.skyboxAzimuthalAngle),
       0,
     );
+  }
+
+  private initializeAtmosphericSky() {
+    if (this.sky) {
+      this.scene.remove(this.sky);
+    }
+    
+    this.sky = new Sky();
+    this.sky.scale.setScalar(10000);
+    this.scene.add(this.sky);
+    
+    // Set default sky parameters
+    const skyUniforms = (this.sky.material as any).uniforms;
+    skyUniforms.turbidity.value = 3.5;
+    skyUniforms.rayleigh.value = 2.5;
+    skyUniforms.mieCoefficient.value = 0.008;
+    skyUniforms.mieDirectionalG.value = 0.85;
+    
+    this.updateAtmosphericSky();
+  }
+
+  private updateAtmosphericSky() {
+    if (!this.sky || !this.skyEnvironmentGenerator) return;
+    
+    const skyUniforms = (this.sky.material as any).uniforms;
+    
+    // Update sky parameters from tweakpane values
+    skyUniforms.turbidity.value = envValues.atmosphericSky.turbidity;
+    skyUniforms.rayleigh.value = envValues.atmosphericSky.rayleigh;
+    skyUniforms.mieCoefficient.value = envValues.atmosphericSky.mieCoefficient;
+    skyUniforms.mieDirectionalG.value = envValues.atmosphericSky.mieDirectionalG;
+    
+    // Update sky parameters from environment configuration if available
+    if (this.environmentConfiguration?.skybox && "atmospheric" in this.environmentConfiguration.skybox) {
+      const atmospheric = this.environmentConfiguration.skybox.atmospheric;
+      if (atmospheric) {
+        if (typeof atmospheric.turbidity === "number") {
+          skyUniforms.turbidity.value = atmospheric.turbidity;
+          envValues.atmosphericSky.turbidity = atmospheric.turbidity;
+        }
+        if (typeof atmospheric.rayleigh === "number") {
+          skyUniforms.rayleigh.value = atmospheric.rayleigh;
+          envValues.atmosphericSky.rayleigh = atmospheric.rayleigh;
+        }
+        if (typeof atmospheric.mieCoefficient === "number") {
+          skyUniforms.mieCoefficient.value = atmospheric.mieCoefficient;
+          envValues.atmosphericSky.mieCoefficient = atmospheric.mieCoefficient;
+        }
+        if (typeof atmospheric.mieDirectionalG === "number") {
+          skyUniforms.mieDirectionalG.value = atmospheric.mieDirectionalG;
+          envValues.atmosphericSky.mieDirectionalG = atmospheric.mieDirectionalG;
+        }
+        if (atmospheric.sunPosition) {
+          skyUniforms.sunPosition.value.copy(atmospheric.sunPosition);
+        }
+      }
+    }
+    
+    // Sync sun position with sky if sun exists
+    if (this.sun) {
+      // Use the EXACT same coordinate calculation as the Sun class
+      // The Sun class uses polarAngle as elevation angle (-90° to +90°)
+      const azimuthalRad = sunValues.sunPosition.sunAzimuthalAngle * (Math.PI / 180);
+      const polarRad = sunValues.sunPosition.sunPolarAngle * (Math.PI / 180);
+      
+      // Create sun position vector using the EXACT same calculation as Sun class
+      // This matches setSunPosition() in Sun.ts exactly
+      const sunPosition = new Vector3(
+        Math.sin(polarRad) * Math.cos(azimuthalRad),
+        Math.cos(polarRad),
+        Math.sin(polarRad) * Math.sin(azimuthalRad)
+      );
+      
+      skyUniforms.sunPosition.value.copy(sunPosition);
+    }
+    
+    // Generate environment map from sky
+    const envMapRenderTarget = this.skyEnvironmentGenerator.generateEnvironmentMap(
+      this.sky, 
+      this.scene, 
+      this.cameraManager.activeCamera.position
+    );
+    const envMap = envMapRenderTarget.texture;
+    
+    // Apply the generated environment map
+    this.scene.environment = envMap;
+    this.scene.environmentIntensity = envValues.envMapIntensity;
+    this.scene.environmentRotation = new Euler(
+      MathUtils.degToRad(envValues.skyboxPolarAngle),
+      MathUtils.degToRad(envValues.skyboxAzimuthalAngle),
+      0,
+    );
+    
+    // The sky mesh itself serves as the background
+    this.scene.background = null; // Clear any existing background texture
+    this.scene.backgroundIntensity = envValues.skyboxIntensity;
+    this.scene.backgroundBlurriness = envValues.skyboxBlurriness;
+    this.scene.backgroundRotation = new Euler(
+      MathUtils.degToRad(envValues.skyboxPolarAngle),
+      MathUtils.degToRad(envValues.skyboxAzimuthalAngle),
+      0,
+    );
+  }
+
+  public syncSunWithSky() {
+    if (!this.sky || !this.sun) return;
+    
+    const skyUniforms = (this.sky.material as any).uniforms;
+    
+    // Use the EXACT same coordinate calculation as Sun class
+    const azimuthalRad = sunValues.sunPosition.sunAzimuthalAngle * (Math.PI / 180);
+    const polarRad = sunValues.sunPosition.sunPolarAngle * (Math.PI / 180);
+    
+    // Create sun position vector using the EXACT same calculation as Sun class
+    const sunPosition = new Vector3(
+      Math.sin(polarRad) * Math.cos(azimuthalRad),
+      Math.cos(polarRad),
+      Math.sin(polarRad) * Math.sin(azimuthalRad)
+    );
+    
+    skyUniforms.sunPosition.value.copy(sunPosition);
+    
+    // Regenerate environment map when sun position changes
+    this.updateAtmosphericSky();
+  }
+
+  /**
+   * Enable sun tracking across the sky
+   * @param speed Speed multiplier for sun movement (default: 1.0)
+   * @param cycleDuration Duration of full sun cycle in seconds (default: 10)
+   */
+  public enableSunTracking(speed: number = 1.0, cycleDuration: number = 10): void {
+    if (!this.sun) {
+      console.warn("Cannot enable sun tracking: no sun instance available");
+      return;
+    }
+    this.sunTrackingEnabled = true;
+   this.sunTrackingSpeed = speed;
+    this.sunCycleDuration = cycleDuration;
+    this.sunStartTime = 0; // Will be set on first update
+  }
+
+  /**
+   * Disable sun tracking
+   */
+  public disableSunTracking(): void {
+    this.sunTrackingEnabled = false;
+  }
+
+  /**
+   * Update sun position based on time for tracking across the sky
+   * @param currentTime Current time from TimeManager
+   */
+  private updateSunTracking(currentTime: number): void {
+    if (!this.sun) return;
+
+    // Initialize start time on first call
+    if (this.sunStartTime === 0) {
+      this.sunStartTime = 50;
+    }
+
+    // Calculate elapsed time since tracking started
+    const elapsedTime = (currentTime - this.sunStartTime) * 0.2;
+    
+    // Calculate progress through the cycle (0 to 1)
+    const cycleProgress = (elapsedTime % this.sunCycleDuration) / this.sunCycleDuration;
+    
+    // Sun moves in a complete 360° circle over the cycle
+    // Start from east (90°), go through south (180°), west (270°), north (0°/360°), back to east
+    const azimuthalAngle = 90 + (cycleProgress * 360); // 90° to 450° (wraps to 90°)
+    
+    // Polar angle in Sun coordinate system: 0° = zenith, 90° = horizon, >90° = below horizon
+    // Create a sine wave where sun is visible for half the cycle and hidden for the other half
+    const minPolarAngle = 50; // High in sky (midday)
+    const maxPolarAngle = 110; // Below horizon (night)
+    const polarAngleRange = maxPolarAngle - minPolarAngle; // 80° range
+    const polarAngleCenter = (minPolarAngle + maxPolarAngle) / 2; // 70° center
+    
+    // Sine wave: sun is high during first half of cycle (day), low during second half (night)
+    // When progress = 0.25 (morning): sun rises
+    // When progress = 0.5 (midday): sun peaks
+    // When progress = 0.75 (evening): sun sets
+    // When progress = 0 or 1 (midnight): sun is below horizon
+    const polarAngle = polarAngleCenter - (Math.cos(cycleProgress * 2 * Math.PI) * (polarAngleRange / 2));
+    
+    // Calculate dynamic sun intensity based on sun elevation
+    // Get the base intensity from configuration or default
+    const baseSunIntensity = this.environmentConfiguration?.sun?.intensity ?? sunValues.sunIntensity;
+    let sunIntensity = 0;
+    
+    // Define horizon and fade zones
+    const horizonAngle = 90; // 90° = horizon
+    const fadeStartAngle = 75; // Start fading intensity at 75° (15° above horizon)
+    const fadeEndAngle = 95; // Complete fade by 95° (5° below horizon)
+    
+    if (polarAngle <= fadeStartAngle) {
+      // Sun is high in sky - full intensity
+      sunIntensity = baseSunIntensity;
+    } else if (polarAngle >= fadeEndAngle) {
+      // Sun is below horizon - zero intensity
+      sunIntensity = 0;
+    } else {
+      // Sun is in the fade zone - interpolate intensity
+      const fadeProgress = (polarAngle - fadeStartAngle) / (fadeEndAngle - fadeStartAngle);
+      // Use smooth fade curve (cosine interpolation for natural sunset effect)
+      const fadeFactor = (Math.cos(fadeProgress * Math.PI) + 1) / 2;
+      sunIntensity = baseSunIntensity * fadeFactor;
+    }
+    
+    // Update sun values and position
+    sunValues.sunPosition.sunAzimuthalAngle = azimuthalAngle % 360; // Keep within 0-360 range
+    sunValues.sunPosition.sunPolarAngle = polarAngle;
+    
+    // Apply the new angles and intensity to the sun
+    this.sun.setAzimuthalAngle((azimuthalAngle % 360) * (Math.PI / 180));
+    this.sun.setPolarAngle(polarAngle * (Math.PI / 180));
+    this.sun.setIntensity(sunIntensity);
+    
+    // Update atmospheric sky if present
+    this.syncSunWithSky();
   }
 }

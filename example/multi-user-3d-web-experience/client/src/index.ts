@@ -34,8 +34,8 @@ const app = new Networked3dWebExperienceClient(holder, {
   avatarConfiguration: {
     availableAvatars: [
       {
-        name: "bot",
-        meshFileUrl: "/assets/models/bot.glb",
+        name: "normie",
+        mmlCharacterUrl: "https://mmlstorage.com/27AP4x/1750542128184.html",
       },
     ],
   },

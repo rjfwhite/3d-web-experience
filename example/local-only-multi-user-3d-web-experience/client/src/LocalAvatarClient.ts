@@ -23,7 +23,6 @@ import doubleJumpAnimationFileUrl from "../../../assets/models/anim_double_jump.
 import idleAnimationFileUrl from "../../../assets/models/anim_idle.glb";
 import jogAnimationFileUrl from "../../../assets/models/anim_jog.glb";
 import sprintAnimationFileUrl from "../../../assets/models/anim_run.glb";
-import defaultAvatarMeshFileUrl from "../../../assets/models/bot.glb";
 
 import { LocalAvatarServer } from "./LocalAvatarServer";
 
@@ -38,9 +37,9 @@ const animationConfig: AnimationConfig = {
 // Specify the avatar to use here:
 const characterDescription: CharacterDescription = {
   // Option 1 (Default) - Use a GLB file directly
-  meshFileUrl: defaultAvatarMeshFileUrl, // This is just an address of a GLB file
+  //meshFileUrl: defaultAvatarMeshFileUrl, // This is just an address of a GLB file
   // Option 2 - Use an MML Character from a URL
-  // mmlCharacterUrl: "https://...",
+  mmlCharacterUrl: "https://mmlstorage.com/27AP4x/1750542128184.html",
   // Option 3 - Use an MML Character from a string
   // mmlCharacterString: `<m-character src="https://..."></m-character>`,
 };

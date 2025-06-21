@@ -9,7 +9,7 @@ export const sunValues = {
     sunAzimuthalAngle: 219,
     sunPolarAngle: -37,
   },
-  sunIntensity: 3.7,
+  sunIntensity: 7.2,
   sunColor: { r: 1.0, g: 1.0, b: 1.0 },
 };
 
@@ -24,16 +24,22 @@ const sunOptions = {
 export const envValues = {
   skyboxAzimuthalAngle: 0,
   skyboxPolarAngle: 0,
-  envMapIntensity: 0.07,
-  skyboxIntensity: 0.8,
+  envMapIntensity: 1.0,
+  skyboxIntensity: 1.0,
   skyboxBlurriness: 0.0,
+  atmosphericSky: {
+    turbidity: 3.5,
+    rayleigh: 2.5,
+    mieCoefficient: 0.008,
+    mieDirectionalG: 0.85,
+  },
   ambientLight: {
-    ambientLightIntensity: 0.27,
+    ambientLightIntensity: 0.0,
     ambientLightColor: { r: 1, g: 1, b: 1 },
   },
   fog: {
-    fogNear: 21,
-    fogFar: 180,
+    fogNear: 1000,
+    fogFar: 1000,
     fogColor: { r: 0.7, g: 0.7, b: 0.7 },
   },
 };
@@ -43,6 +49,12 @@ const envOptions = {
   skyboxPolarAngle: { min: 0, max: 360, step: 1 },
   skyboxIntensity: { min: 0, max: 1.3, step: 0.01 },
   skyboxBlurriness: { min: 0, max: 0.1, step: 0.001 },
+  atmosphericSky: {
+    turbidity: { min: 0.1, max: 30, step: 0.1 },
+    rayleigh: { min: 0.1, max: 10, step: 0.1 },
+    mieCoefficient: { min: 0.001, max: 0.1, step: 0.001 },
+    mieDirectionalG: { min: 0.1, max: 0.99, step: 0.01 },
+  },
   ambientLight: {
     ambientLightIntensity: { min: 0, max: 1, step: 0.01 },
   },
@@ -58,6 +70,7 @@ export class EnvironmentFolder {
   private envMap: FolderApi;
   private hdrButton: ButtonApi;
   private skybox: FolderApi;
+  private atmosphericSky: FolderApi;
   private ambient: FolderApi;
   private fog: FolderApi;
 
@@ -67,6 +80,7 @@ export class EnvironmentFolder {
     this.envMap = this.folder.addFolder({ title: "envMap", expanded: true });
     this.fog = this.folder.addFolder({ title: "fog", expanded: true });
     this.skybox = this.folder.addFolder({ title: "skybox", expanded: true });
+    this.atmosphericSky = this.folder.addFolder({ title: "atmospheric sky", expanded: true });
     this.ambient = this.folder.addFolder({ title: "ambient", expanded: true });
 
     this.sun.addBinding(
@@ -89,6 +103,28 @@ export class EnvironmentFolder {
     this.skybox.addBinding(envValues, "skyboxBlurriness", envOptions.skyboxBlurriness);
     this.skybox.addBinding(envValues, "skyboxAzimuthalAngle", envOptions.skyboxAzimuthalAngle);
     this.skybox.addBinding(envValues, "skyboxPolarAngle", envOptions.skyboxPolarAngle);
+
+    // Atmospheric Sky Controls
+    this.atmosphericSky.addBinding(
+      envValues.atmosphericSky,
+      "turbidity",
+      envOptions.atmosphericSky.turbidity,
+    );
+    this.atmosphericSky.addBinding(
+      envValues.atmosphericSky,
+      "rayleigh",
+      envOptions.atmosphericSky.rayleigh,
+    );
+    this.atmosphericSky.addBinding(
+      envValues.atmosphericSky,
+      "mieCoefficient",
+      envOptions.atmosphericSky.mieCoefficient,
+    );
+    this.atmosphericSky.addBinding(
+      envValues.atmosphericSky,
+      "mieDirectionalG",
+      envOptions.atmosphericSky.mieDirectionalG,
+    );
 
     this.envMap.addBinding(envValues, "envMapIntensity", envOptions.skyboxIntensity);
 
@@ -116,6 +152,8 @@ export class EnvironmentFolder {
     setAmbientLight: () => void,
     setFog: () => void,
     sun: Sun | null,
+    updateAtmosphericSky?: () => void,
+    syncSunWithSky?: () => void,
   ): void {
     this.sun.on("change", (e: TpChangeEvent<unknown, BladeApi<BladeController<View>>>) => {
       const target = (e.target as any).key;
@@ -124,11 +162,13 @@ export class EnvironmentFolder {
         case "sunAzimuthalAngle": {
           const value = e.value as number;
           sun?.setAzimuthalAngle(value * (Math.PI / 180));
+          syncSunWithSky?.();
           break;
         }
         case "sunPolarAngle": {
           const value = e.value as number;
           sun?.setPolarAngle(value * (Math.PI / 180));
+          syncSunWithSky?.();
           break;
         }
         case "sunIntensity": {
@@ -237,5 +277,31 @@ export class EnvironmentFolder {
         }
       }
     });
+
+    this.atmosphericSky.on(
+      "change",
+      (e: TpChangeEvent<unknown, BladeApi<BladeController<View>>>) => {
+        const target = (e.target as any).key;
+        if (!target) return;
+        switch (target) {
+          case "turbidity":
+            envValues.atmosphericSky.turbidity = e.value as number;
+            updateAtmosphericSky?.();
+            break;
+          case "rayleigh":
+            envValues.atmosphericSky.rayleigh = e.value as number;
+            updateAtmosphericSky?.();
+            break;
+          case "mieCoefficient":
+            envValues.atmosphericSky.mieCoefficient = e.value as number;
+            updateAtmosphericSky?.();
+            break;
+          case "mieDirectionalG":
+            envValues.atmosphericSky.mieDirectionalG = e.value as number;
+            updateAtmosphericSky?.();
+            break;
+        }
+      },
+    );
   }
 }

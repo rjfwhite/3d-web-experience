@@ -65,7 +65,7 @@ export class AvatarSelectionUI {
           displayName={this.config.displayName}
           characterDescription={this.config.characterDescription}
           availableAvatars={this.config.availableAvatars}
-          allowCustomAvatars={this.config.allowCustomAvatars || false}
+          allowCustomAvatars={this.config.allowCustomAvatars || true}
           allowCustomDisplayName={this.config.allowCustomDisplayName || false}
         />,
       ),

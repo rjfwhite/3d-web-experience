@@ -148,6 +148,8 @@ export class TweakPane {
     setSkyboxPolarAngle: (azimuthalAngle: number) => void,
     setAmbientLight: () => void,
     setFog: () => void,
+    updateAtmosphericSky?: () => void,
+    syncSunWithSky?: () => void,
   ): void {
     // RenderOptions
     this.rendererFolder.setupChangeEvent(
@@ -168,6 +170,8 @@ export class TweakPane {
       setAmbientLight,
       setFog,
       sun,
+      updateAtmosphericSky,
+      syncSunWithSky,
     );
     this.environment.folder.hidden = hasLighting === false || sun === null;
 
