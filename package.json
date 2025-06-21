@@ -21,7 +21,7 @@
     "packages/*",
     "example/**"
   ],
-  "devDependencies": {
+  "dependencies": {
     "@types/jest": "29.5.14",
     "@types/jju": "^1.4.5",
     "@types/tmp": "^0.2.6",
